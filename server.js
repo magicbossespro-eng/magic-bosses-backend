@@ -15,6 +15,28 @@ app.get('/health', (req, res) => {
   res.json({ ok: true, service: 'Magic Bosses Backend', timestamp: new Date().toISOString() });
 });
 
+// ─── TEST RAPIDE (ouvrir dans le navigateur) ──────────────────────────────────
+app.get('/test', async (req, res) => {
+  const { geocodeAddress } = require('./geocoding');
+  const demande = {
+    client_nom: 'Dupont',
+    client_prenom: 'Pierre',
+    client_telephone: '0612345678',
+    client_email: 'pierre@test.fr',
+    adresse: '15 rue Victor Hugo, 39000 Lons-le-Saunier',
+    creneau: 'Lundi matin',
+    type_prestation: 'DSP',
+    statut: 'en_attente',
+    notes: 'Test automatique',
+    lat: null, lng: null,
+    raw_data: '{}',
+  };
+  const coords = await geocodeAddress(demande.adresse).catch(() => null);
+  if (coords) { demande.lat = coords.lat; demande.lng = coords.lng; }
+  const id = db.createDemande(demande);
+  res.json({ ok: true, message: 'Demande de test créée !', id, geocoded: !!coords });
+});
+
 // ─── ENREGISTREMENT TOKEN PUSH ───────────────────────────────────────────────
 // L'app appelle cette route au démarrage pour enregistrer son token Expo Push.
 app.post('/api/push-token', (req, res) => {
