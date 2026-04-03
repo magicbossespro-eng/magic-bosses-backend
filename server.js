@@ -1,5 +1,7 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const { Expo } = require('expo-server-sdk');
 const db = require('./database');
 const { geocodeAddress } = require('./geocoding');
@@ -7,7 +9,20 @@ const { geocodeAddress } = require('./geocoding');
 const app = express();
 const expo = new Expo();
 
-app.use(cors());
+// Origines autorisées (ton site + app mobile)
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
+app.use(cors({
+  origin: (origin, cb) => {
+    // Autorise les requêtes sans origin (app mobile, Expo Go, Postman)
+    if (!origin) return cb(null, true);
+    if (ALLOWED_ORIGINS.length === 0 || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    cb(new Error('CORS bloqué'));
+  },
+}));
 app.use(express.json({ limit: '5mb' }));
 
 // ─── SANTÉ DU SERVEUR ────────────────────────────────────────────────────────
