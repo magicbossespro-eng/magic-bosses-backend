@@ -14,6 +14,7 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => 
 
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
+  contentSecurityPolicy: false, // permet le chargement du formulaire HTML
 }));
 app.use(cors({
   origin: (origin, cb) => {
@@ -23,7 +24,16 @@ app.use(cors({
     cb(new Error('CORS bloqué'));
   },
 }));
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '15mb' }));
+
+// Sert le formulaire web (backend/public/formulaire.html)
+const path = require('path');
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Route directe pour le formulaire
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'formulaire.html'));
+});
 
 // ─── SANTÉ DU SERVEUR ────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {
@@ -84,12 +94,16 @@ app.post('/webhook/devis', async (req, res) => {
       client_email:     data.client_email || data.email || '',
       adresse:          data.adresse || data.address || '',
       creneau:          data.creneau || data.date_souhaitee || data.slot || data.date || '',
+      disponibilites:   Array.isArray(data.disponibilites) ? data.disponibilites : null,
       type_prestation:  data.type_prestation || data.type || data.service || 'DSP',
       statut:           'en_attente',
       notes:            data.notes || data.message || '',
+      // photo_url = première photo (compat ancien format)
+      photo_url:        data.photo_url || data.photoBase64 || (Array.isArray(data.photos) && data.photos[0]) || null,
+      // photos = tableau complet (nouveau format)
+      photos:           Array.isArray(data.photos) ? data.photos : null,
       lat:              null,
       lng:              null,
-      raw_data:         JSON.stringify(data),
     };
 
     // Géocodage automatique de l'adresse
