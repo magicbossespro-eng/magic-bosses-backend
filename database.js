@@ -58,4 +58,9 @@ module.exports.savePushToken = (token) => {
     const filtered = demandes.filter(d => d.id !== parseInt(id));
     writeJSON(DEMANDES_FILE, filtered);
   };
+  module.exports.deleteDemande = (id) => {
+    const demandes = readJSON(DEMANDES_FILE);
+    const filtered = demandes.filter(d => d.id !== parseInt(id));
+    writeJSON(DEMANDES_FILE, filtered);
+  };
 module.exports.getAllPushTokens = () => readJSON(TOKENS_FILE);
