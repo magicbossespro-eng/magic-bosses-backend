@@ -175,10 +175,21 @@ app.put('/api/demandes/:id', (req, res) => {
   try {
     const { id } = req.params;
     const { statut } = req.body;
-    if (!['en_attente', 'acceptee', 'rejetee'].includes(statut)) {
+    if (!['en_attente', 'acceptee', 'rejetee', 'planifie', 'termine'].includes(statut)) {
       return res.status(400).json({ error: 'Statut invalide' });
     }
     db.updateDemandeStatut(parseInt(id), statut);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Suppression d'une demande
+app.delete('/api/demandes/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    db.deleteDemande(parseInt(id));
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
