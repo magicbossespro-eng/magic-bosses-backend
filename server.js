@@ -5,6 +5,7 @@ const helmet = require('helmet');
 const { Expo } = require('expo-server-sdk');
 const db = require('./database');
 const { geocodeAddress } = require('./geocoding');
+const { optimiserOrdre, calculerPlanning, estimerDuree } = require('./optimization');
 
 const app = express();
 const expo = new Expo();
@@ -184,15 +185,140 @@ app.put('/api/demandes/:id', (req, res) => {
   }
 });
 
+// ─── TOURNÉE INTELLIGENTE ────────────────────────────────────────────────────
+
+/**
+ * POST /api/tournee/optimize
+ * Body: { interventions: [{id, lat, lng, type_bosse, nb_bosses, temps_estime}], startLat, startLng, heureDebut }
+ * Retourne les interventions ordonnées avec ETAs.
+ */
+app.post('/api/tournee/optimize', (req, res) => {
+  try {
+    const { interventions = [], startLat = 0, startLng = 0, heureDebut = '08:00' } = req.body;
+    if (!Array.isArray(interventions)) {
+      return res.status(400).json({ error: 'interventions doit être un tableau' });
+    }
+
+    const enrichies = interventions.map(i => ({
+      ...i,
+      temps_estime: i.temps_estime || estimerDuree(i.type_bosse, i.nb_bosses),
+    }));
+
+    const ordonnees = optimiserOrdre(enrichies, startLat, startLng);
+    const planning  = calculerPlanning(ordonnees, heureDebut);
+
+    res.json({
+      ok: true,
+      interventions:  planning,
+      total:          planning.length,
+      duree_totale:   planning.reduce((s, i) => s + (i.temps_estime || 45) + (i.eta_trajet_min || 0), 0),
+    });
+  } catch (e) {
+    console.error('[Tournee/optimize]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * GET /api/stats/today
+ * Retourne les statistiques de la journée depuis les demandes stockées localement.
+ * (Informationnel — les vraies stats viennent du SQLite de l'app)
+ */
+app.get('/api/stats/today', (req, res) => {
+  try {
+    const today    = new Date().toISOString().split('T')[0];
+    const demandes = db.getAllDemandes();
+    const duJour   = demandes.filter(d => {
+      const date = (d.date_confirmee || d.created_at || '').slice(0, 10);
+      return date === today;
+    });
+
+    res.json({
+      ok:       true,
+      date:     today,
+      total:    duJour.length,
+      en_cours: duJour.filter(d => d.statut === 'planifie').length,
+      termine:  duJour.filter(d => d.statut === 'termine').length,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /api/intervention/:id/notify-complete
+ * Envoie une notification push quand une intervention est terminée.
+ */
+app.post('/api/intervention/:id/notify-complete', async (req, res) => {
+  try {
+    const { nom_client, score_points } = req.body;
+    const tokens = db.getAllPushTokens();
+    if (!tokens.length) return res.json({ ok: true, sent: 0 });
+
+    const messages = tokens
+      .filter(t => Expo.isExpoPushToken(t.token))
+      .map(t => ({
+        to:    t.token,
+        sound: 'default',
+        title: `✅ Intervention terminée${score_points ? ` (+${score_points} pts)` : ''}`,
+        body:  nom_client ? `${nom_client} — réparation validée` : 'Intervention validée',
+        data:  { type: 'intervention_complete', id: req.params.id },
+      }));
+
+    const chunks = expo.chunkPushNotifications(messages);
+    for (const chunk of chunks) {
+      try { await expo.sendPushNotificationsAsync(chunk); } catch (_) {}
+    }
+
+    res.json({ ok: true, sent: messages.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /api/tournee/notify-start
+ * Envoie la notification de début de tournée avec le résumé du jour.
+ */
+app.post('/api/tournee/notify-start', async (req, res) => {
+  try {
+    const { nb_interventions = 0, heure_debut = '08:00' } = req.body;
+    const tokens = db.getAllPushTokens();
+    if (!tokens.length) return res.json({ ok: true, sent: 0 });
+
+    const messages = tokens
+      .filter(t => Expo.isExpoPushToken(t.token))
+      .map(t => ({
+        to:    t.token,
+        sound: 'default',
+        title: `🗺️ Tournée du jour — ${nb_interventions} intervention${nb_interventions > 1 ? 's' : ''}`,
+        body:  `Départ prévu à ${heure_debut}. Bonne tournée !`,
+        data:  { type: 'tournee_start' },
+      }));
+
+    const chunks = expo.chunkPushNotifications(messages);
+    for (const chunk of chunks) {
+      try { await expo.sendPushNotificationsAsync(chunk); } catch (_) {}
+    }
+
+    res.json({ ok: true, sent: messages.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── DÉMARRAGE ───────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`
-╔═══════════════════════════════════════╗
-║   Magic Bosses Backend — Port ${PORT}    ║
-║   Webhook : POST /webhook/devis       ║
-║   API     : GET  /api/demandes        ║
-║   Health  : GET  /health              ║
-╚═══════════════════════════════════════╝
+╔════════════════════════════════════════════╗
+║   Magic Bosses Backend — Port ${PORT}         ║
+║   Webhook  : POST /webhook/devis           ║
+║   API      : GET  /api/demandes            ║
+║   Tournée  : POST /api/tournee/optimize    ║
+║             POST /api/tournee/notify-start ║
+║   Stats    : GET  /api/stats/today         ║
+║   Health   : GET  /health                  ║
+╚════════════════════════════════════════════╝
   `);
 });
