@@ -1,11 +1,47 @@
 require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
+const express  = require('express');
+const cors     = require('cors');
+const helmet   = require('helmet');
+const nodemailer = require('nodemailer');
 const { Expo } = require('expo-server-sdk');
 const db = require('./database');
 const { geocodeAddress } = require('./geocoding');
 const { optimiserOrdre, calculerPlanning, estimerDuree } = require('./optimization');
+
+// ─── MAILER ──────────────────────────────────────────────────────────────────
+const mailer = process.env.GMAIL_USER && process.env.GMAIL_PASS
+  ? nodemailer.createTransport({
+      service: 'gmail',
+      auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_PASS },
+    })
+  : null;
+
+async function envoyerEmailDevis(demande, id) {
+  if (!mailer) return;
+  const opts = [
+    demande.optionRayures ? '+ Effacement rayures' : '',
+    demande.optionLustrage ? '+ Lustrage' : '',
+  ].filter(Boolean).join(', ');
+  await mailer.sendMail({
+    from: `"Magic Bosses Site" <${process.env.GMAIL_USER}>`,
+    to:   process.env.GMAIL_USER,
+    subject: `🔔 Nouveau devis #${id} — ${demande.client_prenom} ${demande.client_nom}`,
+    html: `
+      <h2 style="color:#7b2fbe">Nouveau devis reçu</h2>
+      <table style="border-collapse:collapse;width:100%">
+        <tr><td style="padding:6px;font-weight:bold">Nom</td><td>${demande.client_prenom} ${demande.client_nom}</td></tr>
+        <tr><td style="padding:6px;font-weight:bold">Téléphone</td><td>${demande.client_telephone}</td></tr>
+        <tr><td style="padding:6px;font-weight:bold">Adresse</td><td>${demande.adresse}</td></tr>
+        <tr><td style="padding:6px;font-weight:bold">Type</td><td>${demande.type_prestation}</td></tr>
+        <tr><td style="padding:6px;font-weight:bold">Créneaux</td><td>${demande.creneau || 'Non précisé'}</td></tr>
+        ${opts ? `<tr><td style="padding:6px;font-weight:bold">Options</td><td>${opts}</td></tr>` : ''}
+        ${demande.notes ? `<tr><td style="padding:6px;font-weight:bold">Notes</td><td>${demande.notes}</td></tr>` : ''}
+        ${demande.lat ? `<tr><td style="padding:6px;font-weight:bold">Coords</td><td>${demande.lat}, ${demande.lng}</td></tr>` : ''}
+      </table>
+    `,
+  });
+  console.log('[Email] Devis envoyé par email, id:', id);
+}
 
 const app = express();
 const expo = new Expo();
@@ -123,6 +159,9 @@ app.post('/webhook/devis', async (req, res) => {
     // Sauvegarde en base
     const id = db.createDemande(demande);
     console.log('[DB] Demande sauvegardée, id:', id);
+
+    // Envoi email (backup fiable même si la BDD est réinitialisée)
+    envoyerEmailDevis(demande, id).catch(err => console.error('[Email] Erreur:', err.message));
 
     // Envoi de la notification push vers l'app
     const tokens = db.getAllPushTokens();
